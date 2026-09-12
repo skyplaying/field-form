@@ -1,16 +1,21 @@
 import React from 'react';
-import { mount } from 'enzyme';
 import type { FormInstance } from '../src';
 import Form, { Field } from '../src';
-import timeout from './common/timeout';
+import { waitFakeTime } from './common/timeout';
 import InfoField, { Input } from './common/InfoField';
-import { changeValue, matchError, getField } from './common';
+import { changeValue, matchError, getInput, changeValueWithMockTimer } from './common';
+import { fireEvent, render } from '@testing-library/react';
 
 describe('Form.Dependencies', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('touched', async () => {
+    jest.useFakeTimers();
     const form = React.createRef<FormInstance>();
 
-    const wrapper = mount(
+    const { container } = render(
       <div>
         <Form ref={form}>
           <InfoField name="field_1" />
@@ -20,21 +25,24 @@ describe('Form.Dependencies', () => {
     );
 
     // Not trigger if not touched
-    await changeValue(getField(wrapper, 0), '');
-    matchError(getField(wrapper, 1), false);
+    await changeValueWithMockTimer(getInput(container, 0), ['bamboo', '']);
+    matchError(getInput(container, 1, true), false);
 
     // Trigger if touched
     form.current?.setFields([{ name: 'field_2', touched: true }]);
-    await changeValue(getField(wrapper, 0), '');
-    matchError(getField(wrapper, 1), true);
+
+    await changeValueWithMockTimer(getInput(container, 0), ['bamboo', '']);
+    matchError(getInput(container, 1, true), true);
   });
 
   describe('initialValue', () => {
     function test(name: string, formProps = {}, fieldProps = {}) {
       it(name, async () => {
+        jest.useFakeTimers();
+
         let validated = false;
 
-        const wrapper = mount(
+        const { container } = render(
           <div>
             <Form {...formProps}>
               <InfoField name="field_1" />
@@ -55,7 +63,8 @@ describe('Form.Dependencies', () => {
         );
 
         // Not trigger if not touched
-        await changeValue(getField(wrapper, 0), '');
+        await changeValue(getInput(container, 0), 'bamboo');
+        await waitFakeTime();
         expect(validated).toBeTruthy();
       });
     }
@@ -68,7 +77,7 @@ describe('Form.Dependencies', () => {
     const form = React.createRef<FormInstance>();
     let rendered = false;
 
-    const wrapper = mount(
+    const { container } = render(
       <div>
         <Form ref={form}>
           <Field name="field_1">
@@ -94,15 +103,17 @@ describe('Form.Dependencies', () => {
     ]);
 
     rendered = false;
-    await changeValue(getField(wrapper), '1');
+    await changeValue(getInput(container), '1');
 
     expect(rendered).toBeTruthy();
   });
 
   it('should work when field is dirty', async () => {
+    jest.useFakeTimers();
+
     let pass = false;
 
-    const wrapper = mount(
+    const { container } = render(
       <Form>
         <InfoField
           name="field_1"
@@ -134,26 +145,27 @@ describe('Form.Dependencies', () => {
       </Form>,
     );
 
-    wrapper.find('form').simulate('submit');
-    await timeout();
-    wrapper.update();
-    matchError(getField(wrapper, 0), 'You should not pass');
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFakeTime();
+    matchError(getInput(container, 0, true), 'You should not pass');
 
     // Mock new validate
     pass = true;
-    await changeValue(getField(wrapper, 1), 'bamboo');
-    matchError(getField(wrapper, 0), false);
+    await changeValue(getInput(container, 1), 'bamboo');
+    matchError(getInput(container, 0, true), false);
 
     // Should not validate after reset
     pass = false;
-    wrapper.find('button').simulate('click');
-    await changeValue(getField(wrapper, 1), 'light');
-    matchError(getField(wrapper, 0), false);
+    fireEvent.click(container.querySelector('button')!);
+    await changeValue(getInput(container, 1), 'light');
+    matchError(getInput(container, 0, true), false);
+
+    jest.useRealTimers();
   });
 
   it('should work as a shortcut when name is not provided', async () => {
     const spy = jest.fn();
-    const wrapper = mount(
+    const { container } = render(
       <Form>
         <Field dependencies={['field_1']}>
           {() => {
@@ -170,7 +182,7 @@ describe('Form.Dependencies', () => {
       </Form>,
     );
     expect(spy).toHaveBeenCalledTimes(1);
-    await changeValue(getField(wrapper, 2), 'value2');
+    await changeValue(getInput(container, 1), 'value2');
     // sync start
     //   valueUpdate -> not rerender
     //   depsUpdate  -> not rerender
@@ -179,7 +191,7 @@ describe('Form.Dependencies', () => {
     //   validateFinish -> not rerender
     // async end
     expect(spy).toHaveBeenCalledTimes(1);
-    await changeValue(getField(wrapper, 1), 'value1');
+    await changeValue(getInput(container, 0), 'value1');
     // sync start
     //   valueUpdate -> not rerender
     //   depsUpdate  -> rerender by deps
@@ -193,7 +205,7 @@ describe('Form.Dependencies', () => {
 
   it("shouldn't work when shouldUpdate is set", async () => {
     const spy = jest.fn();
-    const wrapper = mount(
+    const { container } = render(
       <Form>
         <Field dependencies={['field_2']} shouldUpdate={() => true}>
           {() => {
@@ -210,7 +222,7 @@ describe('Form.Dependencies', () => {
       </Form>,
     );
     expect(spy).toHaveBeenCalledTimes(1);
-    await changeValue(getField(wrapper, 1), 'value1');
+    await changeValue(getInput(container, 0), 'value1');
     // sync start
     //   valueUpdate -> rerender by shouldUpdate
     //   depsUpdate  -> rerender by deps
@@ -218,12 +230,166 @@ describe('Form.Dependencies', () => {
     // sync end
     expect(spy).toHaveBeenCalledTimes(2);
 
-    await changeValue(getField(wrapper, 2), 'value2');
+    await changeValue(getInput(container, 1), 'value2');
     // sync start
     //   valueUpdate -> rerender by shouldUpdate
     //   depsUpdate  -> rerender by deps
     //   [ react rerender once -> 3 ]
     // sync end
     expect(spy).toHaveBeenCalledTimes(3);
+  });
+
+  it('shouldUpdate false should not update', () => {
+    let counter = 0;
+    const formRef = React.createRef<FormInstance>();
+
+    const { container } = render(
+      <Form ref={formRef}>
+        <Field name="little" preserve={false}>
+          <Input />
+        </Field>
+
+        <Field shouldUpdate={(prev, next) => prev.little !== next.little}>
+          {(_, __, form) => {
+            // Fill to hide
+            if (!form.getFieldValue('little')) {
+              return <InfoField name="bamboo" preserve={false} />;
+            }
+
+            return null;
+          }}
+        </Field>
+
+        <Field shouldUpdate={() => false}>
+          {() => {
+            counter += 1;
+            return null;
+          }}
+        </Field>
+      </Form>,
+    );
+    expect(counter).toEqual(1);
+    expect(container.querySelectorAll('input')).toHaveLength(2);
+
+    // hide should not re-render
+    fireEvent.change(getInput(container, 0), { target: { value: '1' } });
+    expect(container.querySelectorAll('input')).toHaveLength(1);
+    expect(counter).toEqual(1);
+  });
+
+  it('error should be cleared when dependency field changes and rule becomes false', async () => {
+    const Demo = () => {
+      const [form] = Form.useForm();
+      const type = Form.useWatch('type', form);
+
+      return (
+        <Form form={form}>
+          <InfoField name="type">
+            <Input />
+          </InfoField>
+          <InfoField name="name" rules={[{ required: type !== '1' }]} dependencies={['type']}>
+            <Input />
+          </InfoField>
+        </Form>
+      );
+    };
+
+    const { container } = render(<Demo />);
+    await changeValue(getInput(container, 1), ['bamboo', '']);
+    matchError(container, true);
+
+    // Change type to make rule true
+    await changeValue(getInput(container), '1');
+    matchError(container, false);
+  });
+
+  it('mixed field list should not missing value with onValuesChange', () => {
+    const onValuesChange = jest.fn();
+
+    const { container } = render(
+      <Form
+        initialValues={{ rules: [{ name: 'test', triggers: [] }] }}
+        onValuesChange={onValuesChange}
+      >
+        <Form.List name="rules">
+          {fields =>
+            fields.map(field => (
+              <div key={field.key}>
+                <Field {...field} name={[field.name, 'name']}>
+                  <Input />
+                </Field>
+
+                <Form.List name={[field.name, 'triggers']}>
+                  {(triggerFields, { add }) => (
+                    <>
+                      {triggerFields.map(triggerField => (
+                        <Field {...triggerField} key={triggerField.key}>
+                          <Input />
+                        </Field>
+                      ))}
+                      <button type="button" onClick={() => add('trigger_1')}>
+                        Add trigger
+                      </button>
+                    </>
+                  )}
+                </Form.List>
+              </div>
+            ))
+          }
+        </Form.List>
+      </Form>,
+    );
+
+    fireEvent.click(container.querySelector('button')!);
+
+    expect(onValuesChange).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { rules: [{ name: 'test', triggers: ['trigger_1'] }] },
+    );
+  });
+
+  it('mixed field list remove should not missing value with onValuesChange', () => {
+    const onValuesChange = jest.fn();
+
+    const { container } = render(
+      <Form
+        initialValues={{ rules: [{ name: 'test', triggers: ['trigger_1', 'trigger_2'] }] }}
+        onValuesChange={onValuesChange}
+      >
+        <Form.List name="rules">
+          {fields =>
+            fields.map(field => (
+              <div key={field.key}>
+                <Field {...field} name={[field.name, 'name']}>
+                  <Input />
+                </Field>
+
+                <Form.List name={[field.name, 'triggers']}>
+                  {(triggerFields, { remove }) => (
+                    <>
+                      {triggerFields.map(triggerField => (
+                        <Field {...triggerField} key={triggerField.key}>
+                          <Input />
+                        </Field>
+                      ))}
+                      <button type="button" onClick={() => remove(0)}>
+                        Remove trigger
+                      </button>
+                    </>
+                  )}
+                </Form.List>
+              </div>
+            ))
+          }
+        </Form.List>
+      </Form>,
+    );
+
+    fireEvent.click(container.querySelector('button')!);
+
+    expect(onValuesChange).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { rules: [{ name: 'test', triggers: ['trigger_2'] }] },
+    );
   });
 });

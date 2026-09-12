@@ -1,16 +1,31 @@
 {
   "compilerOptions": {
     "target": "esnext",
-    "moduleResolution": "node",
-    "baseUrl": "./",
+    "moduleResolution": "bundler",
     "jsx": "preserve",
     "declaration": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "paths": {
-      "@/*": ["src/*"],
-      "@@/*": ["src/.umi/*"],
-      "rc-field-form": ["src/index.tsx"]
-    }
-  }
+      "@/*": [
+        "./src/*"
+      ],
+      "@@/*": [
+        "./src/.umi/*"
+      ],
+      "rc-field-form": [
+        "./src/index.tsx"
+      ]
+    },
+    "strict": false,
+    "module": "ESNext"
+  },
+  "include": [
+    "global.d.ts",
+    ".dumirc.ts",
+    ".fatherrc.ts",
+    "src",
+    "tests",
+    "docs"
+  ]
 }

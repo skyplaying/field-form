@@ -1,17 +1,17 @@
 import * as React from 'react';
-import { FormInstance } from './interface';
+import type { FormRef } from './interface';
 import Field from './Field';
 import List from './List';
-import useForm from './useForm';
+import useForm from './hooks/useForm';
 import type { FormProps } from './Form';
 import FieldForm from './Form';
 import { FormProvider } from './FormContext';
 import FieldContext from './FieldContext';
 import ListContext from './ListContext';
-import useWatch from './useWatch';
+import useWatch from './hooks/useWatch';
 
-const InternalForm = React.forwardRef<FormInstance, FormProps>(FieldForm) as <Values = any>(
-  props: FormProps<Values> & { ref?: React.Ref<FormInstance<Values>> },
+const InternalForm = React.forwardRef<FormRef, FormProps>(FieldForm) as <Values = any>(
+  props: FormProps<Values> & { ref?: React.Ref<FormRef<Values>> },
 ) => React.ReactElement;
 
 type InternalFormType = typeof InternalForm;
@@ -31,8 +31,25 @@ RefForm.List = List;
 RefForm.useForm = useForm;
 RefForm.useWatch = useWatch;
 
-export { FormInstance, Field, List, useForm, FormProvider, FieldContext, ListContext, useWatch };
+export { Field, List, useForm, FormProvider, FieldContext, ListContext, useWatch };
 
+export type { FieldProps } from './Field';
+export type { FormProviderProps } from './FormContext';
+export type {
+  FormInstance,
+  FormRef,
+  InternalNamePath,
+  Meta,
+  NamePath,
+  Rule,
+  RuleObject,
+  RuleRender,
+  Store,
+  StoreValue,
+  ValidateErrorEntity,
+  ValidateMessages,
+  ValidatorRule,
+} from './interface';
 export type { FormProps };
 
 export default RefForm;

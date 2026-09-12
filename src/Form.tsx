@@ -6,8 +6,9 @@ import type {
   ValidateMessages,
   Callbacks,
   InternalFormInstance,
+  FormRef,
 } from './interface';
-import useForm from './useForm';
+import useForm from './hooks/useForm';
 import FieldContext, { HOOK_MARK } from './FieldContext';
 import type { FormContextProps } from './FormContext';
 import FormContext from './FormContext';
@@ -16,14 +17,14 @@ import ListContext from './ListContext';
 
 type BaseFormProps = Omit<React.FormHTMLAttributes<HTMLFormElement>, 'onSubmit' | 'children'>;
 
-type RenderProps = (values: Store, form: FormInstance) => JSX.Element | React.ReactNode;
+type RenderProps = (values: Store, form: FormInstance) => React.ReactNode;
 
 export interface FormProps<Values = any> extends BaseFormProps {
   initialValues?: Store;
   form?: FormInstance<Values>;
   children?: RenderProps | React.ReactNode;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  component?: false | string | React.FC<any> | React.ComponentClass<any>;
+  component?: false | string | React.ComponentType<any>;
   fields?: FieldData[];
   name?: string;
   validateMessages?: ValidateMessages;
@@ -33,10 +34,11 @@ export interface FormProps<Values = any> extends BaseFormProps {
   onFinishFailed?: Callbacks<Values>['onFinishFailed'];
   validateTrigger?: string | string[] | false;
   preserve?: boolean;
+  clearOnDestroy?: boolean;
 }
 
-const Form: React.ForwardRefRenderFunction<FormInstance, FormProps> = (
-  {
+const Form: React.ForwardRefRenderFunction<FormRef, FormProps> = (props, ref) => {
+  const {
     name,
     initialValues,
     fields,
@@ -50,15 +52,17 @@ const Form: React.ForwardRefRenderFunction<FormInstance, FormProps> = (
     onFieldsChange,
     onFinish,
     onFinishFailed,
+    clearOnDestroy,
     ...restProps
-  }: FormProps,
-  ref,
-) => {
-  const formContext: FormContextProps = React.useContext(FormContext);
+  } = props;
+
+  const nativeElementRef = React.useRef<HTMLFormElement>(null);
+  const formContext = React.useContext<FormContextProps>(FormContext);
 
   // We customize handle event since Context will makes all the consumer re-render:
   // https://reactjs.org/docs/context.html#contextprovider
   const [formInstance] = useForm(form);
+
   const {
     useSubscribe,
     setInitialValues,
@@ -69,7 +73,10 @@ const Form: React.ForwardRefRenderFunction<FormInstance, FormProps> = (
   } = (formInstance as InternalFormInstance).getInternalHooks(HOOK_MARK);
 
   // Pass ref with form instance
-  React.useImperativeHandle(ref, () => formInstance);
+  React.useImperativeHandle(ref, () => ({
+    ...formInstance,
+    nativeElement: nativeElementRef.current,
+  }));
 
   // Register form into Context
   React.useEffect(() => {
@@ -111,8 +118,9 @@ const Form: React.ForwardRefRenderFunction<FormInstance, FormProps> = (
     mountRef.current = true;
   }
 
+  // ========================== Unmount ===========================
   React.useEffect(
-    () => destroyForm,
+    () => () => destroyForm(clearOnDestroy),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
@@ -131,7 +139,7 @@ const Form: React.ForwardRefRenderFunction<FormInstance, FormProps> = (
   useSubscribe(!childrenRenderProps);
 
   // Listen if fields provided. We use ref to save prev data here to avoid additional render
-  const prevFieldsRef = React.useRef<FieldData[] | undefined>();
+  const prevFieldsRef = React.useRef<FieldData[] | undefined>(null);
   React.useEffect(() => {
     if (!isSimilar(prevFieldsRef.current || [], fields || [])) {
       formInstance.setFields(fields || []);
@@ -139,7 +147,8 @@ const Form: React.ForwardRefRenderFunction<FormInstance, FormProps> = (
     prevFieldsRef.current = fields;
   }, [fields, formInstance]);
 
-  const formContextValue = React.useMemo(
+  // =========================== Render ===========================
+  const formContextValue = React.useMemo<InternalFormInstance>(
     () => ({
       ...(formInstance as InternalFormInstance),
       validateTrigger,
@@ -160,6 +169,7 @@ const Form: React.ForwardRefRenderFunction<FormInstance, FormProps> = (
   return (
     <Component
       {...restProps}
+      ref={nativeElementRef}
       onSubmit={(event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         event.stopPropagation();

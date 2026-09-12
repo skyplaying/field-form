@@ -2,7 +2,7 @@
 import React from 'react';
 
 /* eslint-enable react/prop-types */
-import HTML5Backend from 'react-dnd-html5-backend';
+import { HTML5Backend } from 'react-dnd-html5-backend';
 import { DndProvider } from 'react-dnd';
 import Form, { List, useForm } from 'rc-field-form';
 import Input from './components/Input';
@@ -31,7 +31,7 @@ const Draggable: React.FunctionComponent<DraggableProps> = ({ id, index, move, c
         opacity: isDragging ? 0.5 : 1,
       }}
     >
-      {children}
+      {children as React.ReactElement}
     </div>
   );
 };
@@ -39,6 +39,7 @@ const Demo = () => {
   const [form] = useForm();
 
   return (
+    // @ts-ignore https://github.com/react-dnd/react-dnd/issues/3636
     <DndProvider backend={HTML5Backend}>
       <div>
         <h3>Draggable List of Form</h3>

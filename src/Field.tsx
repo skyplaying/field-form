@@ -1,24 +1,22 @@
-import toChildrenArray from 'rc-util/lib/Children/toArray';
-import warning from 'rc-util/lib/warning';
-import isEqual from 'rc-util/lib/isEqual';
+import { isEqual, toArray as toChildrenArray, warning } from '@rc-component/util';
 import * as React from 'react';
+import FieldContext, { HOOK_MARK } from './FieldContext';
 import type {
+  EventArgs,
   FieldEntity,
   FormInstance,
+  InternalFormInstance,
   InternalNamePath,
+  InternalValidateOptions,
   Meta,
   NamePath,
   NotifyInfo,
   Rule,
-  Store,
-  InternalValidateOptions,
-  InternalFormInstance,
-  RuleObject,
-  StoreValue,
-  EventArgs,
   RuleError,
+  RuleObject,
+  Store,
+  StoreValue,
 } from './interface';
-import FieldContext, { HOOK_MARK } from './FieldContext';
 import ListContext from './ListContext';
 import { toArray } from './utils/typeUtil';
 import { validateRules } from './utils/validateUtil';
@@ -28,8 +26,10 @@ import {
   getNamePath,
   getValue,
 } from './utils/valueUtil';
+import delayFrame from './utils/delayUtil';
 
 const EMPTY_ERRORS: any[] = [];
+const EMPTY_WARNINGS: any[] = [];
 
 export type ShouldUpdate<Values = any> =
   | boolean
@@ -74,6 +74,10 @@ export interface InternalFieldProps<Values = any> {
   shouldUpdate?: ShouldUpdate<Values>;
   trigger?: string;
   validateTrigger?: string | string[] | false;
+  /**
+   * Trigger will after configured milliseconds.
+   */
+  validateDebounce?: number;
   validateFirst?: boolean | 'parallel';
   valuePropName?: string;
   getValueProps?: (value: StoreValue) => Record<string, unknown>;
@@ -104,13 +108,8 @@ export interface FieldState {
 }
 
 // We use Class instead of Hooks here since it will cost much code by using Hooks.
-class Field extends React.Component<InternalFieldProps, FieldState> implements FieldEntity {
+class Field extends React.PureComponent<InternalFieldProps, FieldState> implements FieldEntity {
   public static contextType = FieldContext;
-
-  public static defaultProps = {
-    trigger: 'onChange',
-    valuePropName: 'value',
-  };
 
   public state = {
     resetCount: 0,
@@ -142,7 +141,7 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
   private prevValidating: boolean;
 
   private errors: string[] = EMPTY_ERRORS;
-  private warnings: string[] = EMPTY_ERRORS;
+  private warnings: string[] = EMPTY_WARNINGS;
 
   // ============================== Subscriptions ==============================
   constructor(props: InternalFieldProps) {
@@ -255,12 +254,16 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
     const namePathMatch = namePathList && containsNamePath(namePathList, namePath);
 
     // `setFieldsValue` is a quick access to update related status
-    if (info.type === 'valueUpdate' && info.source === 'external' && prevValue !== curValue) {
+    if (
+      info.type === 'valueUpdate' &&
+      info.source === 'external' &&
+      !isEqual(prevValue, curValue)
+    ) {
       this.touched = true;
       this.dirty = true;
       this.validatePromise = null;
       this.errors = EMPTY_ERRORS;
-      this.warnings = EMPTY_ERRORS;
+      this.warnings = EMPTY_WARNINGS;
       this.triggerMetaEvent();
     }
 
@@ -272,7 +275,7 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
           this.dirty = false;
           this.validatePromise = undefined;
           this.errors = EMPTY_ERRORS;
-          this.warnings = EMPTY_ERRORS;
+          this.warnings = EMPTY_WARNINGS;
           this.triggerMetaEvent();
 
           onReset?.();
@@ -289,7 +292,10 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
        * - Reset A, need clean B, C
        */
       case 'remove': {
-        if (shouldUpdate) {
+        if (
+          shouldUpdate &&
+          requireUpdate(shouldUpdate, prevStore, store, prevValue, curValue, info)
+        ) {
           this.reRender();
           return;
         }
@@ -297,9 +303,8 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
       }
 
       case 'setField': {
+        const { data } = info;
         if (namePathMatch) {
-          const { data } = info;
-
           if ('touched' in data) {
             this.touched = data.touched;
           }
@@ -310,12 +315,16 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
             this.errors = data.errors || EMPTY_ERRORS;
           }
           if ('warnings' in data) {
-            this.warnings = data.warnings || EMPTY_ERRORS;
+            this.warnings = data.warnings || EMPTY_WARNINGS;
           }
           this.dirty = true;
 
           this.triggerMetaEvent();
 
+          this.reRender();
+          return;
+        } else if ('value' in data && containsNamePath(namePathList, namePath, true)) {
+          // Contains path with value should also check
           this.reRender();
           return;
         }
@@ -379,16 +388,23 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
     const namePath = this.getNamePath();
     const currentValue = this.getValue();
 
-    const { triggerName, validateOnly = false } = options || {};
+    const { triggerName, validateOnly = false, delayFrame: showDelayFrame } = options || {};
 
     // Force change to async to avoid rule OOD under renderProps field
-    const rootPromise = Promise.resolve().then(() => {
+    const rootPromise = Promise.resolve().then(async (): Promise<any[]> => {
       if (!this.mounted) {
         return [];
       }
 
-      const { validateFirst = false, messageVariables } = this.props;
+      const { validateFirst = false, messageVariables, validateDebounce } = this.props;
 
+      // Should wait for the frame render,
+      // since developer may `useWatch` value in the rules.
+      if (showDelayFrame) {
+        await delayFrame();
+      }
+
+      // Start validate
       let filteredRules = this.getRules();
       if (triggerName) {
         filteredRules = filteredRules
@@ -401,6 +417,18 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
             const triggerList = toArray(validateTrigger);
             return triggerList.includes(triggerName);
           });
+      }
+
+      // Wait for debounce. Skip if no `triggerName` since its from `validateFields / submit`
+      if (validateDebounce && triggerName) {
+        await new Promise(resolve => {
+          setTimeout(resolve, validateDebounce);
+        });
+
+        // Skip since out of date
+        if (this.validatePromise !== rootPromise) {
+          return [];
+        }
       }
 
       const promise = validateRules(
@@ -447,7 +475,7 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
     this.validatePromise = rootPromise;
     this.dirty = true;
     this.errors = EMPTY_ERRORS;
-    this.warnings = EMPTY_ERRORS;
+    this.warnings = EMPTY_WARNINGS;
     this.triggerMetaEvent();
 
     // Force trigger re-render since we need sync renderProps with new meta
@@ -520,9 +548,10 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
     }
 
     // Filed element only
-    const childList = toChildrenArray(children);
+    const childList = toChildrenArray(children as any);
+
     if (childList.length !== 1 || !React.isValidElement(childList[0])) {
-      return { child: childList, isFunction: false };
+      return { child: childList as React.ReactNode, isFunction: false };
     }
 
     return { child: childList[0], isFunction: false };
@@ -537,11 +566,12 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
 
   public getControlled = (childProps: ChildProps = {}) => {
     const {
-      trigger,
+      name,
+      trigger = 'onChange',
       validateTrigger,
       getValueFromEvent,
       normalize,
-      valuePropName,
+      valuePropName = 'value',
       getValueProps,
       fieldContext,
     } = this.props;
@@ -555,12 +585,23 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
     const value = this.getValue();
     const mergedGetValueProps = getValueProps || ((val: StoreValue) => ({ [valuePropName]: val }));
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const originTriggerFunc: any = childProps[trigger];
+    const originTriggerFunc = childProps[trigger];
+
+    const valueProps = name !== undefined ? mergedGetValueProps(value) : {};
+
+    // warning when prop value is function
+    if (process.env.NODE_ENV !== 'production' && valueProps) {
+      Object.keys(valueProps).forEach(key => {
+        warning(
+          typeof valueProps[key] !== 'function',
+          `It's not recommended to generate dynamic function prop by \`getValueProps\`. Please pass it to child component directly (prop: ${key})`,
+        );
+      });
+    }
 
     const control = {
       ...childProps,
-      ...mergedGetValueProps(value),
+      ...valueProps,
     };
 
     // Add trigger
@@ -570,6 +611,7 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
       this.dirty = true;
 
       this.triggerMetaEvent();
+      const curValue = this.getValue();
 
       let newValue: StoreValue;
       if (getValueFromEvent) {
@@ -579,15 +621,15 @@ class Field extends React.Component<InternalFieldProps, FieldState> implements F
       }
 
       if (normalize) {
-        newValue = normalize(newValue, value, getFieldsValue(true));
+        newValue = normalize(newValue, curValue, getFieldsValue(true));
       }
-
-      dispatch({
-        type: 'updateValue',
-        namePath,
-        value: newValue,
-      });
-
+      if (newValue !== curValue) {
+        dispatch({
+          type: 'updateValue',
+          namePath,
+          value: newValue,
+        });
+      }
       if (originTriggerFunc) {
         originTriggerFunc(...args);
       }
@@ -650,8 +692,10 @@ function WrapperField<Values = any>({ name, ...restProps }: FieldProps<Values>) 
   const listContext = React.useContext(ListContext);
   const namePath = name !== undefined ? getNamePath(name) : undefined;
 
+  const isMergedListField = restProps.isListField ?? !!listContext;
+
   let key: string = 'keep';
-  if (!restProps.isListField) {
+  if (!isMergedListField) {
     key = `_${(namePath || []).join('_')}`;
   }
 
@@ -660,7 +704,7 @@ function WrapperField<Values = any>({ name, ...restProps }: FieldProps<Values>) 
   if (
     process.env.NODE_ENV !== 'production' &&
     restProps.preserve === false &&
-    restProps.isListField &&
+    isMergedListField &&
     namePath.length <= 1
   ) {
     warning(false, '`preserve` should not apply on Form.List fields.');
@@ -670,7 +714,7 @@ function WrapperField<Values = any>({ name, ...restProps }: FieldProps<Values>) 
     <Field
       key={key}
       name={namePath}
-      isListField={!!listContext}
+      isListField={isMergedListField}
       {...restProps}
       fieldContext={fieldContext}
     />

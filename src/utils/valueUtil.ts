@@ -1,5 +1,4 @@
-import getValue from 'rc-util/lib/utils/get';
-import setValue from 'rc-util/lib/utils/set';
+import { get as getValue, set as setValue } from '@rc-component/util';
 import type { InternalNamePath, NamePath, Store, EventArgs } from '../interface';
 import { toArray } from './typeUtil';
 
@@ -16,6 +15,10 @@ export function getNamePath(path: NamePath | null): InternalNamePath {
   return toArray(path);
 }
 
+/**
+ * Create a new store object that contains only the values referenced by
+ * the provided list of name paths.
+ */
 export function cloneByNamePathList(store: Store, namePathList: InternalNamePath[]): Store {
   let newStore = {};
   namePathList.forEach(namePath => {
@@ -44,7 +47,7 @@ export function containsNamePath(
  * Check if `namePath` is super set or equal of `subNamePath`.
  * @param namePath A list of `InternalNamePath[]`
  * @param subNamePath Compare `InternalNamePath`
- * @param partialMatch True will make `[a, b]` match `[a, b, c]`
+ * @param partialMatch Default false. True will make `[a, b]` match `[a, b, c]`
  */
 export function matchNamePath(
   namePath: InternalNamePath,
